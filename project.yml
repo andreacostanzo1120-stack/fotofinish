@@ -1,0 +1,36 @@
+name: FotoFinish
+options:
+  bundleIdPrefix: com.local
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  FotoFinish:
+    type: application
+    platform: iOS
+    sources:
+      - path: FotoFinish
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleDisplayName: FotoFinish
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: "La fotocamera serve a rilevare il passaggio degli atleti sulla linea."
+        NSLocalNetworkUsageDescription: "La rete locale serve a collegare il secondo telefono (Safari) per il cronometraggio."
+        NSBonjourServices:
+          - _fotofinish._tcp
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.fotofinish
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO

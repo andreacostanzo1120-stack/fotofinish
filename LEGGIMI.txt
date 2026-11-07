@@ -1,0 +1,68 @@
+FOTOFINISH v0.1 - COME OTTENERE L'IPA (da Windows, gratis)
+==========================================================
+
+PARTE 1 - COMPILARE L'IPA SU GITHUB (una volta, ~15 minuti)
+-----------------------------------------------------------
+1. Crea un account gratuito su github.com (se non ce l'hai).
+2. In alto a destra: "+" > "New repository".
+   - Nome: fotofinish
+   - Scegli "Public" (cosi' i minuti di compilazione sono gratuiti e illimitati).
+   - Clicca "Create repository".
+3. Estrai questo zip sul PC (clic destro > Estrai tutto).
+4. Nella pagina del repository clicca "uploading an existing file".
+   Trascina DENTRO TUTTE le cartelle e i file estratti (non lo zip):
+   .github, FotoFinish, project.yml, LEGGIMI.txt.
+   Poi clicca "Commit changes".
+5. Controlla che nel repository esista il file  .github/workflows/build.yml
+   Se manca (a volte il trascinamento salta le cartelle che iniziano con il punto):
+   - "Add file" > "Create new file"
+   - Come nome scrivi:  .github/workflows/build.yml
+   - Incolla il contenuto del file build.yml che trovi nello zip
+   - "Commit changes"
+6. Vai nella scheda "Actions". Se chiede di abilitare i workflow, abilitali.
+   Scegli "Build IPA" a sinistra > "Run workflow" > "Run workflow".
+   (Parte anche da solo a ogni modifica.)
+7. Aspetta 5-10 minuti. Pallino verde = compilato.
+   Apri l'esecuzione, in fondo alla pagina c'e' "Artifacts": scarica
+   "FotoFinish-ipa", estrailo: dentro c'e' FotoFinish.ipa.
+
+SE IL PALLINO E' ROSSO
+   Apri l'esecuzione > clicca il job "build" > torna alla pagina principale
+   dell'esecuzione: nel "Summary" c'e' l'elenco degli errori.
+   Copiali e incollali nella chat: li correggo io.
+
+PARTE 2 - INSTALLARE CON SIDELOADLY
+-----------------------------------
+1. Apri Sideloadly, collega l'iPhone, trascina FotoFinish.ipa, inserisci il tuo
+   Apple ID, premi "Start".
+2. Sull'iPhone: Impostazioni > Generali > VPN e gestione dispositivo >
+   tocca il tuo Apple ID > "Autorizza".
+   (Su iOS 16 e successivi serve anche Impostazioni > Privacy e sicurezza >
+   Modalita' sviluppatore: attivala e riavvia.)
+3. Con un Apple ID gratuito l'app scade dopo 7 giorni: basta reinstallarla
+   con Sideloadly (stesso file). Massimo 3 app attive per Apple ID.
+
+PARTE 3 - PRIMO TEST (e' il test che conta di piu')
+---------------------------------------------------
+1. Apri FotoFinish sull'iPhone principale. Consenti "Rete locale" e "Fotocamera".
+2. Attiva Impostazioni > Hotspot personale sull'iPhone principale.
+3. Sul secondo iPhone collegati a quel Wi-Fi.
+4. Nell'app, scheda "Collega": inquadra il QR con la Fotocamera del secondo iPhone
+   e apri il link in Safari.
+5. Safari avvisa che la connessione non e' privata: "Mostra dettagli" >
+   "visita questo sito web". Succede una volta sola.
+6. Tocca "Attiva fotocamera" e consenti.
+   In fondo alla pagina vedi: HTTPS: si' / risoluzione / fps / millisecondi di sincronizzazione.
+7. Sul principale: scheda "Gara", modalita' "Sparo", tocca VIA.
+   Dopo il beep, passa la mano davanti alla fotocamera del secondo telefono:
+   il tempo si ferma.
+
+DIMMI COSA SUCCEDE a ogni passo: se la fotocamera di Safari non si attiva,
+o se la pagina non si apre, cambio strategia (e' il punto piu' delicato).
+
+NOTE
+----
+- Il certificato incluso e' autofirmato, valido fino a gennaio 2029, serve solo
+  per il collegamento locale tra i due telefoni.
+- Tieni entrambi i telefoni con lo schermo acceso e l'app/pagina in primo piano.
+- La fotocamera a 240 fps richiede molta luce. Con luce scarsa l'immagine e' scura.

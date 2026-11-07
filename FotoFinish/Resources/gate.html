@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FotoFinish · Cancello</title>
+<style>
+  :root{
+    --bg:#12161a; --panel:#1c2329; --ink:#f1f3ef; --mute:#9aa5ad;
+    --go:#ff5a2c; --ok:#38d39f; --warn:#f2c14e; --bad:#e5484d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.4 -apple-system,system-ui,"Helvetica Neue",Arial,sans-serif;
+    -webkit-text-size-adjust:100%}
+  body{padding:max(env(safe-area-inset-top),8px) 14px max(env(safe-area-inset-bottom),12px);
+    min-height:100vh;min-height:100dvh;transition:background .15s}
+  body.flash{background:#3a2a22}
+  header{display:flex;align-items:center;gap:10px;padding:6px 0 10px}
+  .dot{width:12px;height:12px;border-radius:50%;background:var(--warn);flex:0 0 12px}
+  .dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)}
+  h1{font-size:18px;margin:0;font-weight:650}
+  #sync{margin-left:auto;color:var(--mute);font-size:14px;text-align:right}
+  .stage{display:none;position:relative;margin:0 auto;background:#000;border-radius:12px;overflow:hidden;
+    width:min(100%, calc((100vh - 250px) * var(--ar, 1.7778)));
+    width:min(100%, calc((100dvh - 250px) * var(--ar, 1.7778)))}
+  video{display:block;width:100%;height:auto}
+  .line{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--go)}
+  .band{position:absolute;top:0;bottom:0;background:rgba(255,90,44,.18)}
+  #status{font-size:26px;font-weight:700;text-align:center;margin:14px 0 2px}
+  body.armed #status{color:var(--go)}
+  #sub{color:var(--mute);text-align:center;min-height:22px;font-size:15px}
+  .meter{height:8px;background:var(--panel);border-radius:4px;overflow:hidden;margin:12px 0}
+  .meter i{display:block;height:100%;width:0;background:var(--ok)}
+  .meter i.hot{background:var(--go)}
+  .row{display:flex;align-items:center;gap:12px;margin:10px 0}
+  .row label{flex:0 0 110px;color:var(--mute);font-size:14px}
+  .row input{flex:1;min-width:0}
+  button{font:inherit;font-weight:650;border:0;border-radius:12px;padding:16px 18px;
+    background:var(--go);color:#fff;width:100%}
+  button.ghost{background:var(--panel);color:var(--ink);font-weight:500;padding:12px;margin-top:6px}
+  button:disabled{opacity:.5}
+  #diag{color:var(--mute);font-size:12px;text-align:center;margin-top:14px;word-break:break-word}
+  #controls{display:none}
+</style>
+</head>
+<body>
+<header>
+  <span id="dot" class="dot"></span>
+  <h1>FotoFinish · Cancello</h1>
+  <span id="sync">Orologio non sincronizzato</span>
+</header>
+
+<button id="go">Attiva fotocamera</button>
+
+<div id="stage" class="stage">
+  <video id="vid" playsinline muted autoplay></video>
+  <div id="band" class="band"></div>
+  <div id="line" class="line"></div>
+</div>
+
+<div id="status">Pronto</div>
+<div id="sub">Tocca “Attiva fotocamera” per iniziare.</div>
+<div class="meter"><i id="meter"></i></div>
+
+<div id="controls">
+  <div class="row"><label for="pos">Posizione linea</label>
+    <input id="pos" type="range" min="10" max="90" value="50"></div>
+  <div class="row"><label for="sens">Sensibilità</label>
+    <input id="sens" type="range" min="0" max="100" value="75"></div>
+  <button id="resync" class="ghost">Sincronizza di nuovo l’orologio</button>
+</div>
+
+<div id="diag"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var vid = $('vid'), stage = $('stage'), lineEl = $('line'), bandEl = $('band');
+  var meter = $('meter'), dot = $('dot'), statusEl = $('status'), subEl = $('sub');
+  var syncEl = $('sync'), diagEl = $('diag');
+
+  var SW = 8, SH = 64, N = SW * SH;
+  var cv = document.createElement('canvas');
+  cv.width = SW; cv.height = SH;
+  var cx = cv.getContext('2d', { willReadFrequently: true });
+  var cur = new Float32Array(N), bg = new Float32Array(N);
+
+  var gateId = 0, offset = 0, rtt = null, syncN = 0;
+  var camOn = false, wakeLock = null;
+  var hostArmed = false, hostRun = -1, armedRun = -2;
+  var learnUntil = 0, deadUntil = 0, streak = 0, streakT = 0, bgReady = false;
+  var ratioNow = 0, fpsNow = 0, frames = 0, fpsStart = 0, lastVW = 0;
+  var pos = 0.5, sens = 0.75;
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function thr() { return 0.5 - 0.45 * sens; }
+  function setConn(ok) { dot.className = 'dot ' + (ok ? 'ok' : 'bad'); }
+  function setStatus(a, b) { statusEl.textContent = a; if (b !== undefined) subEl.textContent = b; }
+
+  try {
+    var sp = parseFloat(localStorage.getItem('ff_pos')), ss = parseFloat(localStorage.getItem('ff_sens'));
+    if (sp >= 0.1 && sp <= 0.9) pos = sp;
+    if (ss >= 0 && ss <= 1) sens = ss;
+  } catch (e) {}
+  $('pos').value = Math.round(pos * 100);
+  $('sens').value = Math.round(sens * 100);
+  function drawLine() {
+    lineEl.style.left = (pos * 100) + '%';
+    var w = Math.max(8, 0.02 * 100);
+    bandEl.style.left = (pos * 100 - w / 2) + '%';
+    bandEl.style.width = w + '%';
+  }
+  drawLine();
+  $('pos').addEventListener('input', function (ev) {
+    pos = ev.target.value / 100; drawLine(); bgReady = false;
+    try { localStorage.setItem('ff_pos', pos); } catch (e) {}
+  });
+  $('sens').addEventListener('input', function (ev) {
+    sens = ev.target.value / 100;
+    try { localStorage.setItem('ff_sens', sens); } catch (e) {}
+  });
+
+  function diag() {
+    var parts = [];
+    parts.push('HTTPS: ' + (window.isSecureContext ? 'sì' : 'NO'));
+    if (vid.videoWidth) parts.push(vid.videoWidth + '×' + vid.videoHeight);
+    if (fpsNow) parts.push(Math.round(fpsNow) + ' fps');
+    if (rtt !== null) parts.push('andata/ritorno ' + rtt.toFixed(1) + ' ms (' + syncN + ' misure)');
+    diagEl.textContent = parts.join(' · ');
+  }
+
+  // ---------- Sincronizzazione orologio ----------
+  async function syncClock(n) {
+    syncEl.textContent = 'Sincronizzo…';
+    var samples = [];
+    for (var i = 0; i < n; i++) {
+      var t0 = performance.now();
+      try {
+        var r = await fetch('/api/time?x=' + i, { cache: 'no-store' });
+        var j = await r.json();
+        var t1 = performance.now();
+        samples.push({ rtt: t1 - t0, off: j.t - ((t0 + t1) / 2) / 1000 });
+      } catch (e) { /* salta il campione */ }
+      await sleep(25);
+    }
+    if (samples.length < 5) { syncEl.textContent = 'Sincronizzazione fallita'; return; }
+    samples.sort(function (a, b) { return a.rtt - b.rtt; });
+    var best = samples.slice(0, Math.max(3, Math.floor(samples.length / 5)));
+    var sum = 0;
+    for (var k = 0; k < best.length; k++) sum += best[k].off;
+    offset = sum / best.length;
+    rtt = best[0].rtt;
+    syncN = samples.length;
+    syncEl.textContent = 'Orologio ± ' + Math.max(1, Math.round(rtt / 2)) + ' ms';
+    diag();
+    try {
+      await fetch('/api/sync', { method: 'POST', cache: 'no-store',
+        body: JSON.stringify({ id: gateId, rtt: rtt, n: syncN }) });
+    } catch (e) {}
+  }
+
+  async function hello() {
+    var r = await fetch('/api/hello', { method: 'POST', cache: 'no-store', body: '{}' });
+    var j = await r.json();
+    gateId = j.id;
+  }
+
+  // ---------- Stato dal telefono principale ----------
+  function refreshStatus() {
+    if (!camOn) return;
+    var now = performance.now();
+    var armedNow = hostArmed && armedRun === hostRun;
+    document.body.classList.toggle('armed', armedNow);
+    if (armedNow && now < learnUntil) setStatus('ARMATO', 'Sto leggendo la scena… resta fuori dalla linea');
+    else if (armedNow) setStatus('ARMATO', 'Pronto al passaggio');
+    else setStatus('In attesa', 'Premi VIA sul telefono principale');
+  }
+
+  async function poll() {
+    try {
+      var r = await fetch('/api/state?id=' + gateId, { cache: 'no-store' });
+      var s = await r.json();
+      setConn(true);
+      if (s.known === false) { await hello(); }
+      hostArmed = !!s.armed; hostRun = s.run;
+      if (hostArmed && armedRun !== hostRun) {
+        armedRun = hostRun;
+        learnUntil = performance.now() + 900;
+        deadUntil = 0; streak = 0; bgReady = false;
+      }
+      if (!hostArmed) armedRun = -2;
+      refreshStatus();
+    } catch (e) {
+      setConn(false);
+      setStatus('Non collegato', 'Riprovo… controlla di essere sul Wi‑Fi del telefono principale');
+    }
+    setTimeout(poll, 300);
+  }
+
+  // ---------- Rilevamento ----------
+  function flash() {
+    document.body.classList.add('flash');
+    setTimeout(function () { document.body.classList.remove('flash'); }, 350);
+  }
+
+  async function postTrigger(payload, tries) {
+    for (var i = 0; i < tries; i++) {
+      try {
+        var r = await fetch('/api/trigger', { method: 'POST', cache: 'no-store', body: JSON.stringify(payload) });
+        if (r.ok) return;
+      } catch (e) {}
+      await sleep(150);
+    }
+  }
+
+  function fire(tFirst) {
+    var hostT = tFirst / 1000 + offset;
+    setStatus('Passaggio rilevato', 'Tempo inviato al telefono principale');
+    flash();
+    postTrigger({ id: gateId, run: armedRun, t: hostT, rtt: rtt }, 4);
+  }
+
+  function processFrame(t, now) {
+    var vw = vid.videoWidth, vh = vid.videoHeight;
+    if (!vw) return;
+    if (vw !== lastVW) { lastVW = vw; stage.style.setProperty('--ar', vw / vh); }
+
+    frames++;
+    if (!fpsStart) fpsStart = now;
+    if (now - fpsStart >= 1000) { fpsNow = frames * 1000 / (now - fpsStart); frames = 0; fpsStart = now; diag(); }
+
+    var bandW = Math.max(8, Math.round(vw * 0.02));
+    var sx = Math.round(vw * pos - bandW / 2);
+    sx = Math.max(0, Math.min(vw - bandW, sx));
+    cx.drawImage(vid, sx, 0, bandW, vh, 0, 0, SW, SH);
+    var d = cx.getImageData(0, 0, SW, SH).data;
+    for (var i = 0, j = 0; j < N; i += 4, j++) {
+      cur[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    }
+    if (!bgReady) { bg.set(cur); bgReady = true; }
+
+    var md = 0, k;
+    for (k = 0; k < N; k++) md += cur[k] - bg[k];
+    md /= N;
+    var changed = 0;
+    for (k = 0; k < N; k++) { if (Math.abs(cur[k] - bg[k] - md) > 22) changed++; }
+    ratioNow = changed / N;
+    meter.style.width = Math.min(100, ratioNow / 0.5 * 100) + '%';
+    meter.className = ratioNow > thr() ? 'hot' : '';
+
+    var armedNow = hostArmed && armedRun === hostRun;
+    if (!armedNow || now < learnUntil) {
+      for (k = 0; k < N; k++) bg[k] += (cur[k] - bg[k]) * 0.15;
+      streak = 0;
+      return;
+    }
+    if (ratioNow > thr()) {
+      if (streak === 0) streakT = t;
+      streak++;
+      if (streak >= 2 && now > deadUntil) {
+        deadUntil = now + 1500;
+        streak = 0;
+        fire(streakT);
+      }
+    } else {
+      streak = 0;
+      var a = 1 / Math.max(fpsNow, 15) / 1.5;
+      for (k = 0; k < N; k++) bg[k] += (cur[k] - bg[k]) * a;
+    }
+  }
+
+  function onFrame(now, meta) {
+    if (!camOn) return;
+    var t = (meta && (meta.captureTime || meta.presentationTime)) || now;
+    processFrame(t, now);
+    scheduleFrame();
+  }
+  function scheduleFrame() {
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+      vid.requestVideoFrameCallback(onFrame);
+    } else {
+      requestAnimationFrame(function (ts) { onFrame(ts, null); });
+    }
+  }
+
+  // ---------- Avvio ----------
+  $('go').addEventListener('click', async function () {
+    var btn = $('go');
+    btn.disabled = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('Fotocamera bloccata dal browser',
+        'Serve una connessione HTTPS: apri l’indirizzo che inizia con https:// mostrato sul telefono principale.');
+      diag();
+      btn.disabled = false;
+      return;
+    }
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
+        audio: false
+      });
+      vid.srcObject = stream;
+      await vid.play();
+    } catch (e) {
+      setStatus('Fotocamera non disponibile', (e && e.name ? e.name : 'Errore') + ': ' + (e && e.message ? e.message : ''));
+      diag();
+      btn.disabled = false;
+      return;
+    }
+    camOn = true;
+    btn.style.display = 'none';
+    stage.style.display = 'block';
+    $('controls').style.display = 'block';
+    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+    try {
+      await hello();
+      setConn(true);
+    } catch (e) {
+      setConn(false);
+      setStatus('Non collegato', 'Il telefono principale non risponde.');
+    }
+    refreshStatus();
+    scheduleFrame();
+    poll();
+    syncClock(40);
+    setInterval(function () {
+      if (!(hostArmed && armedRun === hostRun)) syncClock(20);
+    }, 30000);
+  });
+
+  $('resync').addEventListener('click', function () { syncClock(40); });
+
+  document.addEventListener('visibilitychange', async function () {
+    if (document.visibilityState === 'visible' && camOn) {
+      try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+    }
+  });
+
+  diag();
+})();
+</script>
+</body>
+</html>
