@@ -1,3 +1,29 @@
+FOTOFINISH v0.2 - COME AGGIORNARE (hai gia' il repository su GitHub)
+====================================================================
+
+1. Estrai questo zip sul PC.
+2. Su GitHub apri il tuo repository > "Add file" > "Upload files".
+3. Trascina DENTRO la cartella "FotoFinish" e il file "project.yml"
+   (i file con lo stesso nome vengono sostituiti, quelli nuovi aggiunti).
+   Poi "Commit changes".
+4. La build parte da sola. Se non parte: Actions > Build IPA > Run workflow.
+5. A build verde scarica l'IPA e installalo con Sideloadly come prima.
+   Se e' rossa: apri l'esecuzione, nel Summary ci sono gli errori: incollali nella chat.
+
+NOVITA' DELLA v0.2
+- Allenamento: programma (es. 2x3x150), griglia dei tempi per atleta, confronto.
+- Fotofinish a scansione di linea: tocchi l'immagine, leggi il tempo, assegni gli atleti.
+- Piu' arrivi per prova, classifica con distacchi in secondi e in metri.
+- Tempo di reazione allo start (modalita' Sparo).
+- Statistiche avanzate, report PDF, backup, tema, caratteri, modalita' campo, iPad.
+- Calibrazione dei due telefoni (Altro > Calibra i due telefoni).
+
+Poi la pagina web sul secondo telefono si aggiorna da sola: basta ricaricarla in Safari.
+
+--------------------------------------------------------------------
+ISTRUZIONI ORIGINALI (prima installazione)
+--------------------------------------------------------------------
+
 FOTOFINISH v0.1 - COME OTTENERE L'IPA (da Windows, gratis)
 ==========================================================
 

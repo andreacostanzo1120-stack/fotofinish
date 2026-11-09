@@ -27,6 +27,18 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
     private var ratioThreshold: Float = 0.16
     private var lineIsColumn = true
     private var resetBackground = true
+    private var flipRows = false
+
+    /// Fotogrammi al secondo massimi (si applica alla prima configurazione della fotocamera)
+    var targetFPS: Double = 240
+
+    // Registro circolare delle colonne di immagine sulla linea (fotofinish a scansione)
+    private let ringCap = 2400
+    private let ringH = 720
+    private var ring = [UInt8](repeating: 0, count: 2400 * 720 * 4)
+    private var ringTimes = [Double](repeating: 0, count: 2400)
+    private var ringWrite = 0
+    private let ringLock = NSLock()
 
     // Stato usato solo sulla coda della fotocamera
     private let gridAcross = 6
@@ -106,6 +118,7 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
         if let c = column {
             lock.lock()
             lineIsColumn = c
+            flipRows = (o == .landscapeRight || o == .portraitUpsideDown)
             lock.unlock()
         }
     }
@@ -136,7 +149,7 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
 
     /// Sceglie il formato con più fotogrammi al secondo (max 240) tra 1280 e 1920 pixel di larghezza.
     private func selectFormat(_ dev: AVCaptureDevice) {
-        let target = 240.0
+        let target = targetFPS
         var best: AVCaptureDevice.Format?
         var bestFPS = 0.0
         var bestWidth = Int32.max
@@ -183,6 +196,79 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
         }
     }
 
+    // MARK: Fotofinish a scansione di linea
+
+    private func storeColumn(pixelBuffer: CVPixelBuffer, pts: Double, isColumn: Bool, flip: Bool, w: Int, h: Int) {
+        guard let yBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0),
+              let cBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else { return }
+        let yStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let cStride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
+        let yp = yBase.assumingMemoryBound(to: UInt8.self)
+        let cp = cBase.assumingMemoryBound(to: UInt8.self)
+        let length = isColumn ? h : w
+
+        ringLock.lock()
+        let slot = ringWrite % ringCap
+        var o = slot * ringH * 4
+        for i in 0..<ringH {
+            var src = i * length / ringH
+            if flip { src = length - 1 - src }
+            let x = isColumn ? w / 2 : src
+            let y = isColumn ? src : h / 2
+            let luma = Float(yp[y * yStride + x])
+            let cOff = (y / 2) * cStride + (x / 2) * 2
+            let cb = Float(cp[cOff]) - 128
+            let cr = Float(cp[cOff + 1]) - 128
+            let r = luma + 1.402 * cr
+            let g = luma - 0.344136 * cb - 0.714136 * cr
+            let b = luma + 1.772 * cb
+            ring[o] = UInt8(max(0, min(255, r)))
+            ring[o + 1] = UInt8(max(0, min(255, g)))
+            ring[o + 2] = UInt8(max(0, min(255, b)))
+            ring[o + 3] = 255
+            o += 4
+        }
+        ringTimes[slot] = pts
+        ringWrite += 1
+        ringLock.unlock()
+    }
+
+    /// Ricostruisce l'immagine delle colonne registrate tra gli istanti a e b (orologio HostClock).
+    func snapshot(from a: Double, to b: Double) -> (image: CGImage, times: [Double])? {
+        ringLock.lock()
+        defer { ringLock.unlock() }
+        let total = ringWrite
+        if total == 0 { return nil }
+        let count = min(total, ringCap)
+        var slots: [Int] = []
+        for k in (total - count)..<total {
+            let i = k % ringCap
+            let t = ringTimes[i]
+            if t >= a && t <= b { slots.append(i) }
+        }
+        if slots.count < 10 { return nil }
+        let width = slots.count
+        let height = ringH
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        for (c, i) in slots.enumerated() {
+            let srcBase = i * height * 4
+            for r in 0..<height {
+                let s = srcBase + r * 4
+                let d = (r * width + c) * 4
+                pixels[d] = ring[s]
+                pixels[d + 1] = ring[s + 1]
+                pixels[d + 2] = ring[s + 2]
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue)
+        guard let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: info, provider: provider, decode: nil,
+                                  shouldInterpolate: false, intent: .defaultIntent) else { return nil }
+        return (image: image, times: slots.map { ringTimes[$0] })
+    }
+
     // MARK: Analisi dei fotogrammi
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -202,6 +288,7 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
         let since = armedSince
         let threshold = ratioThreshold
         let isColumn = lineIsColumn
+        let flip = flipRows
         let reset = resetBackground
         resetBackground = false
         lock.unlock()
@@ -213,6 +300,8 @@ final class CameraGate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, 
         let h = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
         let p = base.assumingMemoryBound(to: UInt8.self)
+
+        storeColumn(pixelBuffer: pixelBuffer, pts: pts, isColumn: isColumn, flip: flip, w: w, h: h)
 
         let block = 4
         let thick = max(24, (isColumn ? w : h) / 40)

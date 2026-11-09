@@ -9,6 +9,7 @@ struct FotoFinishApp: App {
             RootView()
                 .environmentObject(engine)
                 .environmentObject(engine.store)
+                .environmentObject(engine.settings)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true
                     engine.startServices()
@@ -18,16 +19,25 @@ struct FotoFinishApp: App {
 }
 
 struct RootView: View {
+    @EnvironmentObject var e: RaceEngine
+    @EnvironmentObject var settings: AppSettings
+
     var body: some View {
-        TabView {
+        TabView(selection: $e.selectedTab) {
             RaceView()
                 .tabItem { Label("Gara", systemImage: "stopwatch") }
-            ResultsView()
-                .tabItem { Label("Risultati", systemImage: "list.bullet") }
-            StatsView()
-                .tabItem { Label("Statistiche", systemImage: "chart.xyaxis.line") }
-            ConnectView()
-                .tabItem { Label("Collega", systemImage: "qrcode") }
+                .tag(0)
+            SessionsView()
+                .tabItem { Label("Allenamento", systemImage: "list.bullet.rectangle") }
+                .tag(1)
+            HistoryView()
+                .tabItem { Label("Storico", systemImage: "chart.xyaxis.line") }
+                .tag(2)
+            MoreView()
+                .tabItem { Label("Altro", systemImage: "ellipsis.circle") }
+                .tag(3)
         }
+        .preferredColorScheme(settings.colorScheme)
+        .dynamicTypeSize(settings.typeRange)
     }
 }

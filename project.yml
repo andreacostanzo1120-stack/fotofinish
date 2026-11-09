@@ -22,6 +22,11 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: "La fotocamera serve a rilevare il passaggio degli atleti sulla linea."
         NSLocalNetworkUsageDescription: "La rete locale serve a collegare il secondo telefono (Safari) per il cronometraggio."
         NSBonjourServices:
@@ -30,7 +35,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.local.fotofinish
-        TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "0.1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.2"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: NO

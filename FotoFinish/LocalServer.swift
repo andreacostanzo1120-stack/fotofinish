@@ -195,7 +195,7 @@ final class LocalServer {
                 let resp = self.handler(req)
                 conn.send(content: resp.serialized(), completion: .contentProcessed({ _ in }))
             }
-            if error != nil || isComplete || buf.count > 1_000_000 {
+            if error != nil || isComplete || buf.count > 8_000_000 {
                 conn.cancel()
                 return
             }

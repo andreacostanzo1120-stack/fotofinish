@@ -1,7 +1,7 @@
 import SwiftUI
 import Charts
 
-// MARK: - Risultati
+// MARK: - Condivisione
 
 struct ShareItem: Identifiable {
     let id = UUID()
@@ -18,9 +18,44 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
+// MARK: - Storico
+
+struct HistoryView: View {
+    @State private var page = 0
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("Sezione", selection: $page) {
+                    Text("Prove").tag(0)
+                    Text("Statistiche").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                if page == 0 {
+                    RunsListView()
+                } else {
+                    StatsView()
+                }
+            }
+            .navigationTitle("Storico")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
 struct RunRow: View {
     let run: Run
     let isPB: Bool
+    let hasStrip: Bool
+
+    private var subtitle: String {
+        var parts = ["\(fmtDist(run.distance)) m", run.mode.title,
+                     run.date.formatted(date: .omitted, time: .shortened)]
+        if let s = run.series, let r = run.rep { parts.append("serie \(s) rip. \(r)") }
+        if let ms = run.reactionMs { parts.append("reazione \(Int(ms.rounded())) ms") }
+        return parts.joined(separator: " · ")
+    }
 
     var body: some View {
         HStack {
@@ -32,6 +67,9 @@ struct RunRow: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            if hasStrip {
+                Image(systemName: "camera.viewfinder").foregroundColor(.secondary)
+            }
             VStack(alignment: .trailing, spacing: 2) {
                 Text(fmtTime(run.time))
                     .font(.title2.weight(.semibold).monospacedDigit())
@@ -46,65 +84,161 @@ struct RunRow: View {
             }
         }
     }
-
-    private var subtitle: String {
-        let when = run.date.formatted(date: .abbreviated, time: .shortened)
-        return "\(fmtDist(run.distance)) m · \(run.mode.title) · \(when)"
-    }
 }
 
-struct ResultsView: View {
+struct DayGroup: Identifiable {
+    let id: Date
+    let runs: [Run]
+}
+
+struct RunsListView: View {
     @EnvironmentObject var store: DataStore
-    @State private var shareItem: ShareItem?
+    @State private var filter = ""
+    @State private var editing: Run?
+
+    private var filtered: [Run] {
+        filter.isEmpty ? store.runs : store.runs.filter { $0.athlete == filter }
+    }
+
+    private var groups: [DayGroup] {
+        let cal = Calendar.current
+        let dict = Dictionary(grouping: filtered) { cal.startOfDay(for: $0.date) }
+        return dict.keys.sorted(by: >).map { day in
+            DayGroup(id: day, runs: (dict[day] ?? []).sorted { $0.date > $1.date })
+        }
+    }
+
+    private var athleteNames: [String] {
+        Array(Set(store.runs.map { $0.athlete })).sorted()
+    }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if store.runs.isEmpty {
-                    Text("Nessuna prova ancora.\nVai su Gara e tocca VIA.")
-                        .multilineTextAlignment(.center)
+        Group {
+            if store.runs.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Text("Nessuna prova ancora.")
+                        .font(.headline)
+                    Text("Vai su Gara e tocca VIA.")
                         .foregroundColor(.secondary)
-                } else {
-                    List {
-                        ForEach(store.runs) { r in
-                            RunRow(run: r, isPB: store.isPB(r))
+                    Spacer()
+                }
+            } else {
+                List {
+                    Section {
+                        Picker("Atleta", selection: $filter) {
+                            Text("Tutti gli atleti").tag("")
+                            ForEach(athleteNames, id: \.self) { n in
+                                Text(n.isEmpty ? "Senza nome" : n).tag(n)
+                            }
                         }
-                        .onDelete { offsets in
-                            store.delete(at: offsets)
+                    }
+                    ForEach(groups) { g in
+                        Section(g.id.formatted(date: .complete, time: .omitted)) {
+                            ForEach(g.runs) { r in
+                                Button {
+                                    editing = r
+                                } label: {
+                                    RunRow(run: r, isPB: store.isPB(r),
+                                           hasStrip: r.raceId.map { store.hasStrip($0) } ?? false)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .onDelete { offsets in
+                                store.delete(ids: Set(offsets.map { g.runs[$0].id }))
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle("Risultati")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Esporta CSV") { exportCSV() }
-                        .disabled(store.runs.isEmpty)
+        }
+        .sheet(item: $editing) { r in
+            RunEditSheet(run: r)
+        }
+    }
+}
+
+struct RunEditSheet: View {
+    @EnvironmentObject var store: DataStore
+    @Environment(\.dismiss) private var dismiss
+    @State var run: Run
+    @State private var timeText = ""
+    @State private var distText = ""
+    @State private var noteText = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Atleta") {
+                    Picker("Atleta", selection: $run.athlete) {
+                        Text("Senza nome").tag("")
+                        ForEach(store.athletes, id: \.self) { n in
+                            Text(n).tag(n)
+                        }
+                    }
+                }
+                Section("Tempo e distanza") {
+                    HStack {
+                        Text("Tempo (s)")
+                        Spacer()
+                        TextField("11.52", text: $timeText)
+                            .keyboardType(.numbersAndPunctuation)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("Distanza (m)")
+                        Spacer()
+                        TextField("100", text: $distText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                Section("Nota") {
+                    TextField("Facoltativa", text: $noteText)
+                }
+                if let rid = run.raceId, store.hasStrip(rid) {
+                    Section {
+                        NavigationLink {
+                            PhotoFinishView(raceId: rid)
+                        } label: {
+                            Label("Apri il fotofinish", systemImage: "camera.viewfinder")
+                        }
+                    }
+                }
+                Section {
+                    Button("Elimina questa prova", role: .destructive) {
+                        store.delete(ids: [run.id])
+                        dismiss()
+                    }
                 }
             }
-            .sheet(item: $shareItem) { item in
-                ShareSheet(items: [item.url])
+            .navigationTitle("Prova")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annulla") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Salva") { save() }
+                }
+            }
+            .onAppear {
+                timeText = String(format: "%.2f", run.time)
+                distText = fmtDist(run.distance)
+                noteText = run.note ?? ""
             }
         }
     }
 
-    private func num(_ d: Double, _ digits: Int) -> String {
-        String(format: "%.\(digits)f", d).replacingOccurrences(of: ".", with: ",")
-    }
-
-    private func exportCSV() {
-        var csv = "data;atleta;distanza_m;modalita;tempo_s;velocita_kmh;incertezza_ms\n"
-        let formatter = ISO8601DateFormatter()
-        for r in store.runs.reversed() {
-            let when = formatter.string(from: r.date)
-            let unc = r.uncertaintyMs.map { num($0, 1) } ?? ""
-            let line = [when, r.athlete, num(r.distance, 1), r.mode.title,
-                        num(r.time, 3), num(r.speedKMH, 2), unc].joined(separator: ";")
-            csv += line + "\n"
-        }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fotofinish-risultati.csv")
-        try? csv.write(to: url, atomically: true, encoding: .utf8)
-        shareItem = ShareItem(url: url)
+    private func save() {
+        var r = run
+        if let t = parseTime(timeText), t > 0 { r.time = t }
+        if let d = Double(distText.replacingOccurrences(of: ",", with: ".")), d > 0 { r.distance = d }
+        r.note = noteText.isEmpty ? nil : noteText
+        let athleteChanged = r.athlete != (store.runs.first { $0.id == r.id }?.athlete ?? r.athlete)
+        store.update(r)
+        if athleteChanged { store.assign(r.id, athlete: r.athlete) }
+        dismiss()
     }
 }
 
@@ -134,6 +268,8 @@ struct StatsView: View {
     @EnvironmentObject var store: DataStore
     @State private var athlete = ""
     @State private var distance = 0.0
+    @State private var avgN = 3
+    @State private var share: ShareItem?
 
     private var athletes: [String] {
         Array(Set(store.runs.map { $0.athlete })).sorted()
@@ -150,30 +286,30 @@ struct StatsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if store.runs.isEmpty {
+        Group {
+            if store.runs.isEmpty {
+                VStack {
+                    Spacer()
                     Text("Le statistiche compaiono dopo la prima prova.")
                         .foregroundColor(.secondary)
-                } else {
-                    content
+                    Spacer()
                 }
+            } else {
+                content
             }
-            .navigationTitle("Statistiche")
-            .onAppear { fixSelection() }
-            .onChange(of: athlete) { _ in
-                distance = distances.first ?? 0
-            }
+        }
+        .onAppear { fixSelection() }
+        .onChange(of: athlete) { _ in
+            distance = distances.first ?? 0
+        }
+        .sheet(item: $share) { item in
+            ShareSheet(items: [item.url])
         }
     }
 
     private func fixSelection() {
-        if !athletes.contains(athlete) {
-            athlete = athletes.first ?? ""
-        }
-        if !distances.contains(distance) {
-            distance = distances.first ?? 0
-        }
+        if !athletes.contains(athlete) { athlete = athletes.first ?? "" }
+        if !distances.contains(distance) { distance = distances.first ?? 0 }
     }
 
     private var content: some View {
@@ -192,35 +328,66 @@ struct StatsView: View {
                 }
             }
             if let st = Stats(times) {
-                summary(st)
+                summary(st, times: times)
                 Section("Andamento") {
-                    chart(times)
+                    trendChart(times)
+                }
+                if times.count >= 3 {
+                    Section("Distribuzione dei tempi") {
+                        histogramChart(times)
+                    }
+                }
+                fatigueSection()
+                comparison()
+                projections(st)
+                Section {
+                    Button {
+                        makeReport(st)
+                    } label: {
+                        Label("Crea report PDF", systemImage: "doc.richtext")
+                    }
                 }
             }
         }
     }
 
-    private func summary(_ st: Stats) -> some View {
-        Section("Riepilogo") {
+    private func summary(_ st: Stats, times: [Double]) -> some View {
+        let year = Calendar.current.component(.year, from: Date())
+        let sb = store.seasonBest(athlete: athlete, distance: distance, year: year)
+        return Section("Riepilogo") {
             StatRow("Prove", "\(st.n)")
             StatRow("Record personale", fmtTime(st.best) + " s")
+            if let sb = sb {
+                StatRow("Miglior tempo \(year)", fmtTime(sb) + " s")
+            }
             if distance > 0 {
                 StatRow("Velocità del record", String(format: "%.1f km/h", distance / st.best * 3.6))
             }
             StatRow("Ultima prova", fmtTime(st.last) + " s")
-            StatRow("Ultima rispetto al record", String(format: "%+.2f s", st.last - st.best))
+            StatRow("Ultima rispetto al record", fmtSigned(st.last - st.best) + " s")
+            if let p = Analytics.percentileBeaten(times, value: st.last) {
+                StatRow("L’ultima batte", String(format: "%.0f %% delle altre", p))
+            }
             StatRow("Media", fmtTime(st.mean) + " s")
             StatRow("Mediana", fmtTime(st.median) + " s")
             StatRow("Deviazione standard", String(format: "%.2f s", st.sd))
             StatRow("Costanza (variazione)", String(format: "%.1f %%", st.cv))
             if st.n > 1 {
-                StatRow("Tendenza per prova", String(format: "%+.3f s", st.slope))
-                StatRow("Ultima rispetto alla prima", String(format: "%+.1f %%", (st.last - st.first) / st.first * 100))
+                StatRow("Tendenza per prova", fmtSigned(st.slope, 3) + " s")
+            }
+            if times.count >= avgN, let b = Analytics.bestAverage(times, n: avgN) {
+                Stepper(value: $avgN, in: 2...6) {
+                    HStack {
+                        Text("Miglior media di \(avgN)")
+                        Spacer()
+                        Text(fmtTime(b) + " s").foregroundColor(.secondary).monospacedDigit()
+                    }
+                }
             }
         }
     }
 
-    private func chart(_ times: [Double]) -> some View {
+    private func trendChart(_ times: [Double]) -> some View {
         Chart {
             ForEach(Array(times.enumerated()), id: \.offset) { index, t in
                 LineMark(x: .value("Prova", index + 1), y: .value("Tempo (s)", t))
@@ -230,43 +397,100 @@ struct StatsView: View {
         .chartYScale(domain: .automatic(includesZero: false))
         .frame(height: 200)
     }
-}
 
-// MARK: - Atleti
-
-struct AthletesView: View {
-    @EnvironmentObject var store: DataStore
-    @EnvironmentObject var e: RaceEngine
-    @State private var newName = ""
-
-    var body: some View {
-        List {
-            Section("Nuovo atleta") {
-                HStack {
-                    TextField("Nome", text: $newName)
-                    Button("Aggiungi") { add() }
-                }
+    private func histogramChart(_ times: [Double]) -> some View {
+        let bins = Analytics.histogram(times)
+        return Chart {
+            ForEach(bins) { b in
+                BarMark(x: .value("Tempo", b.label), y: .value("Prove", b.count))
             }
-            Section("Atleti") {
-                ForEach(store.athletes, id: \.self) { name in
-                    Text(name)
-                }
-                .onDelete { offsets in
-                    store.athletes.remove(atOffsets: offsets)
-                    if !store.athletes.contains(e.athlete) {
-                        e.athlete = store.athletes.first ?? ""
+        }
+        .frame(height: 160)
+    }
+
+    private func fatigueSection() -> some View {
+        let all = store.runs.filter { $0.athlete == athlete && $0.distance == distance }
+        let cal = Calendar.current
+        let byDay = Dictionary(grouping: all) { cal.startOfDay(for: $0.date) }
+        var fatigues: [Double] = []
+        for (_, list) in byDay {
+            let t = list.sorted { $0.date < $1.date }.map { $0.time }
+            if let f = Analytics.fatigue(t) { fatigues.append(f) }
+        }
+        let rec = Analytics.recoveries(store.runs.filter { $0.athlete == athlete })
+        return Section("Fatica e recuperi") {
+            if fatigues.isEmpty {
+                Text("Servono almeno due prove nello stesso giorno.")
+                    .foregroundColor(.secondary)
+                    .font(.footnote)
+            } else {
+                let avg = fatigues.reduce(0, +) / Double(fatigues.count)
+                StatRow("Calo medio (ultima vs prima)", String(format: "%+.1f %%", avg))
+            }
+            if rec.isEmpty {
+                Text("Nessun recupero misurabile.")
+                    .foregroundColor(.secondary)
+                    .font(.footnote)
+            } else {
+                let avgRec = rec.reduce(0, +) / Double(rec.count)
+                StatRow("Recupero medio tra le prove", fmtDuration(avgRec))
+            }
+        }
+    }
+
+    private func comparison() -> some View {
+        var unsorted: [(String, Double)] = []
+        for a in athletes {
+            let best = store.runs.filter { $0.athlete == a && $0.distance == distance }.map { $0.time }.min()
+            if let b = best { unsorted.append((a, b)) }
+        }
+        let rows = unsorted.sorted { $0.1 < $1.1 }
+        return Section("Atleti a confronto sui \(fmtDist(distance)) m") {
+            if rows.count < 2 {
+                Text("Serve almeno un altro atleta con prove su questa distanza.")
+                    .foregroundColor(.secondary)
+                    .font(.footnote)
+            } else {
+                let lead = rows[0].1
+                ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                    HStack {
+                        Text("\(idx + 1)° \(row.0.isEmpty ? "Senza nome" : row.0)")
+                        Spacer()
+                        VStack(alignment: .trailing) {
+                            Text(fmtTime(row.1) + " s").monospacedDigit()
+                            if idx > 0 {
+                                let dt = row.1 - lead
+                                Text(String(format: "+%.2f s · %.1f m", dt, dt * (distance / row.1)))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
                 }
             }
         }
-        .navigationTitle("Atleti")
     }
 
-    private func add() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, !store.athletes.contains(name) else { return }
-        store.athletes.append(name)
-        e.athlete = name
-        newName = ""
+    private func projections(_ st: Stats) -> some View {
+        Section("Proiezioni indicative") {
+            if st.best >= 90 {
+                ForEach([800.0, 1000.0, 1500.0, 3000.0, 5000.0].filter { $0 != distance }, id: \.self) { d in
+                    StatRow("\(fmtDist(d)) m", fmtDuration(Analytics.riegel(time: st.best, from: distance, to: d)))
+                }
+                Text("Formula di Riegel: stima approssimativa per mezzofondo e fondo.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("Disponibili per prove di mezzofondo e fondo (record oltre 1:30). Per gli sprint la formula non è affidabile.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func makeReport(_ st: Stats) {
+        if let url = ReportBuilder.athleteReport(athlete: athlete, distance: distance, runs: series, stats: st) {
+            share = ShareItem(url: url)
+        }
     }
 }

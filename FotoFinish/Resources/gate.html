@@ -87,6 +87,14 @@
   var cx = cv.getContext('2d', { willReadFrequently: true });
   var cur = new Float32Array(N), bg = new Float32Array(N);
 
+  // Registro circolare delle colonne di immagine (fotofinish a scansione di linea)
+  var STRIP_H = 360, CAP = 700;
+  var rc = document.createElement('canvas');
+  rc.width = CAP; rc.height = STRIP_H;
+  var rcx = rc.getContext('2d');
+  var rTimes = new Float64Array(CAP);   // millisecondi di performance.now()
+  var rWrite = 0;
+
   var gateId = 0, offset = 0, rtt = null, syncN = 0;
   var camOn = false, wakeLock = null;
   var hostArmed = false, hostRun = -1, armedRun = -2;
@@ -205,21 +213,45 @@
     setTimeout(function () { document.body.classList.remove('flash'); }, 350);
   }
 
-  async function postTrigger(payload, tries) {
+  async function postJSON(url, payload, tries) {
     for (var i = 0; i < tries; i++) {
       try {
-        var r = await fetch('/api/trigger', { method: 'POST', cache: 'no-store', body: JSON.stringify(payload) });
+        var r = await fetch(url, { method: 'POST', cache: 'no-store', body: JSON.stringify(payload) });
         if (r.ok) return;
       } catch (e) {}
       await sleep(150);
     }
   }
 
+  // Costruisce e invia l'immagine del fotofinish attorno al passaggio
+  function uploadStrip(fireT, hostT, runId) {
+    var from = fireT - 1500, to = fireT + 3000;
+    var first = Math.max(0, rWrite - CAP);
+    var idx = [];
+    for (var k = first; k < rWrite; k++) {
+      var tt = rTimes[k % CAP];
+      if (tt >= from && tt <= to) idx.push(k);
+    }
+    if (idx.length < 10) return;
+    var out = document.createElement('canvas');
+    out.width = idx.length; out.height = STRIP_H;
+    var ox = out.getContext('2d');
+    var times = [];
+    for (var j = 0; j < idx.length; j++) {
+      ox.drawImage(rc, idx[j] % CAP, 0, 1, STRIP_H, j, 0, 1, STRIP_H);
+      times.push(Math.round((rTimes[idx[j] % CAP] / 1000 + offset) * 10000) / 10000);
+    }
+    var b64 = out.toDataURL('image/jpeg', 0.8).split(',')[1];
+    postJSON('/api/strip', { id: gateId, run: runId, t: hostT, times: times, jpeg: b64 }, 3);
+  }
+
   function fire(tFirst) {
     var hostT = tFirst / 1000 + offset;
+    var runId = armedRun;
     setStatus('Passaggio rilevato', 'Tempo inviato al telefono principale');
     flash();
-    postTrigger({ id: gateId, run: armedRun, t: hostT, rtt: rtt }, 4);
+    postJSON('/api/trigger', { id: gateId, run: runId, t: hostT, rtt: rtt }, 4);
+    setTimeout(function () { uploadStrip(tFirst, hostT, runId); }, 3300);
   }
 
   function processFrame(t, now) {
@@ -230,6 +262,13 @@
     frames++;
     if (!fpsStart) fpsStart = now;
     if (now - fpsStart >= 1000) { fpsNow = frames * 1000 / (now - fpsStart); frames = 0; fpsStart = now; diag(); }
+
+    var cw = Math.max(1, Math.round(vw * 0.004));
+    var csx = Math.max(0, Math.min(vw - cw, Math.round(vw * pos - cw / 2)));
+    var wi = rWrite % CAP;
+    rcx.drawImage(vid, csx, 0, cw, vh, wi, 0, 1, STRIP_H);
+    rTimes[wi] = t;
+    rWrite++;
 
     var bandW = Math.max(8, Math.round(vw * 0.02));
     var sx = Math.round(vw * pos - bandW / 2);
@@ -273,7 +312,7 @@
 
   function onFrame(now, meta) {
     if (!camOn) return;
-    var t = (meta && (meta.captureTime || meta.presentationTime)) || now;
+    var t = (meta && meta.captureTime) || now;
     processFrame(t, now);
     scheduleFrame();
   }
